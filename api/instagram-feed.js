@@ -1,97 +1,62 @@
 const BASE_URL = "https://www.socialcrawl.dev";
 
-// Change these paths if SocialCrawl's docs show different endpoints.
 const POSTS_PATH =
   process.env.SOCIALCRAWL_POSTS_PATH || "/v1/instagram/profile/posts";
-const REELS_PATH =
-  process.env.SOCIALCRAWL_REELS_PATH || "/v1/instagram/profile/reels";
+
+// Optional. Only set this env var if SocialCrawl has a separate reels endpoint.
+const REELS_PATH = process.env.SOCIALCRAWL_REELS_PATH || "";
 
 function pickArray(result) {
   if (Array.isArray(result)) return result;
   const candidates = [
-    result?.data,
     result?.data?.items,
     result?.data?.posts,
-    result?.data?.reels,
+    result?.data,
     result?.items,
-    result?.posts,
-    result?.reels,
-    result?.results
+    result?.posts
   ];
   return candidates.find(Array.isArray) || [];
 }
 
 function firstString(...values) {
-  return values.find((v) => typeof v === "string" && v.length > 0) || "";
+  const found = values.find((v) => typeof v === "string" && v.length > 0);
+  return found || "";
 }
 
 function normalize(rawItem, forcedType) {
-  const post = rawItem?.post || rawItem?.node || rawItem;
+  const post = rawItem?.post || rawItem;
   if (!post || typeof post !== "object") return null;
 
-  const shortcode = firstString(post.shortcode, post.code);
+  const content = post.content || {};
+  const mediaUrl = Array.isArray(content.media_urls)
+    ? firstString(...content.media_urls)
+    : firstString(content.media_urls);
 
-  let url = firstString(
-    post.url,
-    post.permalink,
-    post.post_url,
-    post.link,
-    post.shortcode_url
-  );
+  const mediaType = String(post.ext?.media_type || "").toLowerCase();
+  const isVideo =
+    mediaType === "video" ||
+    /\.mp4(\?|$)/i.test(mediaUrl) ||
+    forcedType === "reel";
 
-  const videoUrl = firstString(
-    post.video_url,
-    post.video?.url,
-    post.video_versions?.[0]?.url,
-    post.ext?.video_url
-  );
+  const videoUrl = isVideo ? mediaUrl : "";
 
-  const isReel =
-    forcedType === "reel" ||
-    post.product_type === "clips" ||
-    post.media_type === "REEL" ||
-    /\/reels?\//.test(url);
+  const thumbnail = isVideo
+    ? firstString(content.thumbnail_url)
+    : firstString(content.thumbnail_url, mediaUrl);
 
-  if (!url && shortcode) {
-    url = `https://www.instagram.com/${isReel ? "reel" : "p"}/${shortcode}/`;
-  }
-
-  const thumbnail = firstString(
-    post.thumbnail_url,
-    post.image_url,
-    post.display_url,
-    post.thumbnail,
-    post.cover_url,
-    post.image,
-    post.media_url,
-    post.image_versions2?.candidates?.[0]?.url,
-    post.ext?.image_url
-  );
+  const url = firstString(post.url);
 
   if (!url || !thumbnail) return null;
 
-  const isVideo = isReel || post.is_video === true || Boolean(videoUrl);
-
-  const timestamp =
-    post.taken_at_timestamp ||
-    post.taken_at ||
-    post.timestamp ||
-    post.created_at ||
-    0;
-
   return {
-    id: String(post.id || shortcode || url),
-    type: isReel ? "reel" : isVideo ? "video" : "post",
+    id: String(post.id || url),
+    type: isVideo ? "reel" : "post",
     url,
     thumbnail,
     videoUrl,
-    caption: firstString(
-      post.caption,
-      post.caption?.text,
-      post.text,
-      post.description
-    ).slice(0, 200),
-    timestamp: Number(new Date(timestamp)) || Number(timestamp) || 0
+    caption: firstString(content.text).slice(0, 200),
+    author: firstString(post.author?.username),
+    timestamp: Number(new Date(post.published_at)) || 0
   };
 }
 
@@ -133,18 +98,17 @@ export default async function handler(req, res) {
     });
   }
 
-  const debug = req.query?.debug === "1";
-
   try {
     const [postsResult, reelsResult] = await Promise.allSettled([
       fetchList(POSTS_PATH, apiKey, handle),
-      fetchList(REELS_PATH, apiKey, handle)
+      REELS_PATH ? fetchList(REELS_PATH, apiKey, handle) : Promise.resolve(null)
     ]);
 
     const posts = postsResult.status === "fulfilled" ? postsResult.value : null;
     const reels = reelsResult.status === "fulfilled" ? reelsResult.value : null;
 
-    if (debug) {
+    // Raw response for troubleshooting: /api/instagram-feed?debug=1
+    if (req.query?.debug === "1") {
       res.setHeader("Cache-Control", "no-store");
       return res.status(200).json({
         postsStatus: posts?.status,
@@ -170,13 +134,13 @@ export default async function handler(req, res) {
       )
     ].filter(Boolean);
 
-    // Remove duplicates, then sort newest first.
     const seen = new Set();
     const unique = items.filter((item) => {
       if (seen.has(item.url)) return false;
       seen.add(item.url);
       return true;
     });
+
     unique.sort((a, b) => b.timestamp - a.timestamp);
 
     res.setHeader(
