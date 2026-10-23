@@ -48,16 +48,25 @@ function normalize(rawItem, forcedType) {
 
   if (!url || !thumbnail) return null;
 
-  return {
-    id: String(post.id || url),
-    type: isVideo ? "reel" : "post",
-    url,
-    thumbnail,
-    videoUrl,
-    caption: firstString(content.text).slice(0, 200),
-    author: firstString(post.author?.username),
-    timestamp: Number(new Date(post.published_at)) || 0
-  };
+  
+return {
+  id: String(post.id || url),
+  type: isVideo ? "reel" : "post",
+  url,
+  thumbnail,
+  videoUrl,
+  caption: firstString(content.text).slice(0, 200),
+  author: firstString(post.author?.username),
+  name: firstString(
+    post.author?.display_name,
+    post.author?.username
+  ),
+  avatar: firstString(post.author?.avatar_url),
+  likes: Number(post.engagement?.likes) || 0,
+  comments: Number(post.engagement?.comments) || 0,
+  timestamp: Number(new Date(post.published_at)) || 0
+};
+
 }
 
 async function fetchList(path, apiKey, handle) {
