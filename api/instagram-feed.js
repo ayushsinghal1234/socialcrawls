@@ -1,6 +1,12 @@
 
 export default async function handler(req, res) {
-  res.setHeader("Cache-Control", "s-maxage=900, stale-while-revalidate=3600");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Cache-Control", "no-store");
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
 
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -11,32 +17,47 @@ export default async function handler(req, res) {
 
   if (!apiKey || !handle) {
     return res.status(500).json({
-      error: "Server configuration is missing"
+      error: "Missing environment variables",
+      hasApiKey: Boolean(apiKey),
+      hasInstagramHandle: Boolean(handle)
     });
   }
 
   try {
-    const endpoint = new URL(
+    const url = new URL(
       "https://www.socialcrawl.dev/v1/instagram/profile/posts"
     );
-    endpoint.searchParams.set("handle", handle);
+    url.searchParams.set("handle", handle);
 
-    const response = await fetch(endpoint, {
+    const upstream = await fetch(url, {
       headers: { "x-api-key": apiKey }
     });
 
-    const result = await response.json();
+    const body = await upstream.text();
 
-    if (!response.ok || result.success === false) {
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
       return res.status(502).json({
-        error: "Socialcrawl could not return Instagram posts"
+        error: "Socialcrawl returned non-JSON data",
+        upstreamStatus: upstream.status
       });
     }
 
-    return res.status(200).json(result);
-  } catch {
+    if (!upstream.ok) {
+      return res.status(502).json({
+        error: "Socialcrawl API request failed",
+        upstreamStatus: upstream.status,
+        details: data
+      });
+    }
+
+    return res.status(200).json(data);
+  } catch (error) {
+    console.error("Instagram feed error:", error);
     return res.status(502).json({
-      error: "Unable to load the Instagram feed"
+      error: "Backend request failed"
     });
   }
 }
